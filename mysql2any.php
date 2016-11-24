@@ -17,7 +17,6 @@ class Convert{
         if ($sqlFilename != NULL){
             $this->convertFile($sqlFilename);
         }
-
         print("\nende\n");
     }
 
@@ -44,7 +43,7 @@ class Convert{
     //List with all wrong items
     function wrongItems()
     {
-        $item = array('`', 'COMMENT','int(', 'unsigned', 'AUTO_INCREMENT', 'ENGINE', 'KEY', ';', 'datetime',',\'', 'UNLOCK TABLES', 'enum(');
+        $item = array('longblob', 'CHARACTER SET','longtext','`', 'COMMENT','int(', 'unsigned', 'AUTO_INCREMENT', 'ENGINE', 'KEY', ';', 'datetime',',\'', 'UNLOCK TABLES', 'enum(');
         return $item;
     }
 
@@ -83,17 +82,57 @@ class Convert{
         return $content;
     }
 
+
+
+    //pg_cataloge.varchar
+    //filename varchar()
+    //create index assets_
+
+
     //convert CREATE TABLE lines
     function convert_create($content){
 
         $item = $this->wrongItems();
+        $before = array();      //for statements before 'CREATE INDEX' like
         $index = array();      //for creating the 'CREATE INDEX' statements
         $comment = array();     //for creating the 'COMMENT' statements
+        $return = array();
+        $tablename = NULL;
+
+        //create TYPEs before CREATE TABLE order!
+        foreach($content as $first_num => $first){
+
+            if(mb_strstr($first,'CREATE TABLE',FALSE) != FALSE)
+            {
+                $tablename = mb_strstr($first,'`',FALSE);
+                $tablename = mb_strstr($tablename,'(',TRUE);
+                $tablename = str_replace('`','',$tablename);
+                $tablename = str_replace(' ','',$tablename);
+            }
+
+            $first= str_replace('`','',$first);
+
+            if(mb_strstr($first,'enum(',FALSE)!= FALSE){
+
+                $first = trim($first);
+                $first_content = mb_strstr($first,'(',FALSE);
+                $first_content = mb_strstr($first_content,')',TRUE);
+                $first = "\n".'CREATE TYPE '.$tablename.'_'.mb_strstr($first,'enum(',TRUE).'AS ENUM '.$first_content.");";
+
+                $before[] = $first;
+            }
+        }
+
         $tablename = NULL;
 
         foreach ($content as $line_num => $line)
         {
             $line = trim($line);
+
+            /*ERROR:  syntax error at or near ","
+            LINE 1: CREATE INDEX assets_path,filename ON assets (path,filename);
+            */
+
 
             //extract the tablename from CREATE TABLE
             if(mb_strstr($line,'CREATE TABLE',FALSE) != FALSE)
@@ -108,14 +147,42 @@ class Convert{
             {
                 if (mb_strstr($line,$item_value,FALSE) != FALSE)
                 {
+                    //CONVERT 'LONGBLOB' NOT CLEAR!!
+                    //for test convert in 'text' (option 'BYTEA')
+                    if($item_value == 'longblob'){
+
+                        $line = str_replace($item_value,'TEXT',$line);
+                        /*
+                        print("\nel que lee esto es una estupidez");
+                        echo 'ERROR: ';
+                        var_dump($line);
+                        echo 'Type '.$item_value." can not clearly converted \n";
+                        echo "See code line 150\n";
+                        echo "operation aborted!\n";
+                        exit;
+                        */
+
+                    }
+
+                    //CONVERT 'CHARACTER SET' to check()
+                    if($item_value == 'CHARACTER SET'){
+                        $item_to = mb_strstr($line,$item_value,TRUE);
+                        $item_from = mb_strstr($line,$item_value,FALSE);
+                        $item_from = str_replace($item_value.' ','',$item_from);
+                        $item_from = mb_strstr($item_from,' ',FALSE);
+
+                        $line = $item_to.$item_from;
+                    }
+
                     //Remove all " ` " in tablename, columnname etc
                     if($item_value == '`'){
                         $line = str_replace('`','',$line);
                     }
 
-                    // Remove all unsigned
+                    // convert all unsigned in CHECK()
                     if($item_value == 'unsigned'){
-                        $line = str_replace('unsigned',' ',$line);
+                        $cache_value_columnname = mb_strstr($line,' ',TRUE);
+                        $line = str_replace('unsigned','CHECK('.$cache_value_columnname.'>= 0)',$line);
                     }
 
                     // Remove al AUTO_INCREMENT
@@ -123,10 +190,20 @@ class Convert{
                         $line = str_replace('AUTO_INCREMENT',' ',$line);
                     }
 
+                    //ALL enum to TYPE
+                    if($item_value == 'enum('){
+                        $line = mb_strstr($line,'enum(',TRUE) .$tablename.'_'.mb_strstr($line,'enum(',TRUE).',';
+                    }
+
                     //ALL datetime in timestamp
                     if($item_value == 'datetime')
                     {
                         $line = str_replace($item_value,'timestamp',$line);
+                    }
+
+                    //REPLACE 'longtext' into 'text'
+                    if($item_value == 'longtext'){
+                        $line = str_replace($item_value,'text',$line);
                     }
 
                     //ALL 'x'-int(n) to Integer
@@ -182,7 +259,7 @@ class Convert{
                                 $cache_value_columnname = str_replace('(','',$cache_value_columnname);
 
                                 $line = NULL;
-                                $index[] = 'CREATE INDEX'.' '.$tablename.'_'.$cache_value_columnname.' ON '.$tablename.' ('.$cache_value_columnname.');';
+                                $index[] = 'CREATE INDEX'.' '.$tablename.'_'.str_replace(',','_',$cache_value_columnname).' ON '.$tablename.' ('.$cache_value_columnname.');';
                             }
                         }
                     }
@@ -214,7 +291,7 @@ class Convert{
                     do{
                         if (array_key_exists($line_num - $n,$content)){
                             if($n >= 1){
-                                $content[$line_num - $n] = str_replace(',', '',$content[$line_num - $n]);
+                                $content[$line_num - $n] = str_replace(",\n","\n",$content[$line_num - $n]);
                                 $forward = FALSE;
                             };
                         }
@@ -224,13 +301,22 @@ class Convert{
             }
         }
 
+        foreach($before as $before_num => $before_line){
+            $return[] = $before_line."\n";
+        }
+
+        foreach($content as $content_num => $content_line){
+            $return[] = $content_line;
+        }
+
         foreach($index as $index_num => $index_line){
-            $content[] = $index_line."\n";
+            $return[] = $index_line."\n";
         }
         foreach($comment as $comment_num => $comment_line){
-            $content[] = $comment_line."\n";
+            $return[] = $comment_line."\n";
         }
-        return $content;
+
+        return $return;
     }
 
     //convert lines to standard
@@ -241,7 +327,7 @@ class Convert{
         $handle = fopen($sqlFilename,"r");
         $newfile = fopen("convert_".$sqlFilename,"w+");
         $cache = NULL;
-        $content[] = "/*converted file:".$sqlFilename."\n\n\n */";
+        $content[] = NULL;
 
         do {
 
@@ -264,7 +350,7 @@ class Convert{
                 fwrite($newfile,"\n");
                 $content = NULL; // STACK
             }
-
+/*
             if(mb_strstr($cache,'insert',FALSE) != FALSE OR mb_strstr($cache,'INSERT',FALSE) != FALSE){
                 do {
                     $content[] = $cache;
@@ -283,7 +369,7 @@ class Convert{
                 fwrite($newfile,"\n");
                 $content = NULL; // STACK
             }
-
+*/
             $cache = fgets($handle);
         }while($cache != FALSE);
 
