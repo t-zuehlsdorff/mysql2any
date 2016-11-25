@@ -43,11 +43,11 @@ class Convert{
     //List with all wrong items
     function wrongItems()
     {
-        $item = array('longblob', 'CHARACTER SET','longtext','`', 'COMMENT','int(', 'unsigned', 'AUTO_INCREMENT', 'ENGINE', 'KEY', ';', 'datetime',',\'', 'UNLOCK TABLES', 'enum(');
+        $item = array('double', 'longblob', 'CHARACTER SET','longtext','`', 'COMMENT','int(', 'unsigned', 'AUTO_INCREMENT', 'ENGINE', 'KEY', ';', 'datetime',',\'', 'UNLOCK TABLES', 'enum(');
         return $item;
     }
 
-    //convert CREATE TABLE lines
+    //convert INSERT INTO lines
     function convert_insert($content){
 
         $item = $this->wrongItems();
@@ -82,13 +82,6 @@ class Convert{
         return $content;
     }
 
-
-
-    //pg_cataloge.varchar
-    //filename varchar()
-    //create index assets_
-
-
     //convert CREATE TABLE lines
     function convert_create($content){
 
@@ -98,41 +91,12 @@ class Convert{
         $comment = array();     //for creating the 'COMMENT' statements
         $return = array();
         $tablename = NULL;
-
-        //create TYPEs before CREATE TABLE order!
-        foreach($content as $first_num => $first){
-
-            if(mb_strstr($first,'CREATE TABLE',FALSE) != FALSE)
-            {
-                $tablename = mb_strstr($first,'`',FALSE);
-                $tablename = mb_strstr($tablename,'(',TRUE);
-                $tablename = str_replace('`','',$tablename);
-                $tablename = str_replace(' ','',$tablename);
-            }
-
-            $first= str_replace('`','',$first);
-
-            if(mb_strstr($first,'enum(',FALSE)!= FALSE){
-
-                $first = trim($first);
-                $first_content = mb_strstr($first,'(',FALSE);
-                $first_content = mb_strstr($first_content,')',TRUE);
-                $first = "\n".'CREATE TYPE '.$tablename.'_'.mb_strstr($first,'enum(',TRUE).'AS ENUM '.$first_content.");";
-
-                $before[] = $first;
-            }
-        }
-
-        $tablename = NULL;
+        $columnname = NULL;
 
         foreach ($content as $line_num => $line)
         {
             $line = trim($line);
-
-            /*ERROR:  syntax error at or near ","
-            LINE 1: CREATE INDEX assets_path,filename ON assets (path,filename);
-            */
-
+            $columnname = NULL;
 
             //extract the tablename from CREATE TABLE
             if(mb_strstr($line,'CREATE TABLE',FALSE) != FALSE)
@@ -143,10 +107,71 @@ class Convert{
                 $tablename = str_replace(' ','',$tablename);
             }
 
+            //extract A! columnname from statement. It can be a name for a new column,
+            //it can be a name for a key or something
+            //Necessary for write the columnname: "columnname" if a column is named like a SQL order like "default" oder "from"
+            //a column can be named like a SQL order but it should not  ...
+            //code not optimal
+            if($line != NULL){
+                if($line[0] == "`"){
+                    $columnname = mb_strstr($line,'`',FALSE);
+                    $columnname = mb_strstr($columnname," ",TRUE);
+                    $columnname = str_replace('`','',$columnname);
+                }
+            }
+
+            if(mb_strstr($line,'enum(',FALSE)!= FALSE){
+
+                $first = trim($line);
+                $first_content = mb_strstr($first,'(',FALSE);
+                $first_content = mb_strstr($first_content,')',TRUE);
+                $first = "\n".'CREATE TYPE '.$tablename.'_'.mb_strstr($first,'enum(',TRUE).'AS ENUM '.$first_content.");";
+
+                $before[] = $first;
+            }
+
             foreach ($item as $item_num => $item_value)
             {
                 if (mb_strstr($line,$item_value,FALSE) != FALSE)
                 {
+
+                    //CONVERT 'CHARACTER SET' to check()
+                    if($item_value == 'CHARACTER SET'){
+                        $item_to = mb_strstr($line,$item_value,TRUE);
+                        $item_from = mb_strstr($line,$item_value,FALSE);
+                        $item_from = str_replace($item_value.' ','',$item_from);
+                        $item_from = mb_strstr($item_from,' ',FALSE);
+
+                        $line = $item_to.$item_from;
+                    }
+
+                    //Remove all " ` " in tablename, columnname etc
+                    if($item_value == '`'){
+                        $line = str_replace($item_value,'',$line);
+                    }
+
+                    // convert all unsigned in CHECK()
+                    if($item_value == 'unsigned'){
+                        $cache_value_columnname = mb_strstr($line,' ',TRUE);
+                        $line = str_replace($item_value,'CHECK('.$cache_value_columnname.' >= 0)',$line);
+                    }
+
+                    // Remove al AUTO_INCREMENT
+                    if($item_value == 'AUTO_INCREMENT'){
+                        $line = str_replace($item_value,' ',$line);
+                    }
+
+                    //ALL enum to TYPE
+                    if($item_value == 'enum('){
+                        $line = mb_strstr($line,'enum(',TRUE) .$tablename.'_'.mb_strstr($line,'enum(',TRUE).',';
+                    }
+
+                    //ALL datetime in timestamp
+                    if($item_value == 'datetime')
+                    {
+                        $line = str_replace($item_value,'timestamp',$line);
+                    }
+
                     //CONVERT 'LONGBLOB' NOT CLEAR!!
                     //for test convert in 'text' (option 'BYTEA')
                     if($item_value == 'longblob'){
@@ -161,44 +186,11 @@ class Convert{
                         echo "operation aborted!\n";
                         exit;
                         */
-
                     }
 
-                    //CONVERT 'CHARACTER SET' to check()
-                    if($item_value == 'CHARACTER SET'){
-                        $item_to = mb_strstr($line,$item_value,TRUE);
-                        $item_from = mb_strstr($line,$item_value,FALSE);
-                        $item_from = str_replace($item_value.' ','',$item_from);
-                        $item_from = mb_strstr($item_from,' ',FALSE);
-
-                        $line = $item_to.$item_from;
-                    }
-
-                    //Remove all " ` " in tablename, columnname etc
-                    if($item_value == '`'){
-                        $line = str_replace('`','',$line);
-                    }
-
-                    // convert all unsigned in CHECK()
-                    if($item_value == 'unsigned'){
-                        $cache_value_columnname = mb_strstr($line,' ',TRUE);
-                        $line = str_replace('unsigned','CHECK('.$cache_value_columnname.'>= 0)',$line);
-                    }
-
-                    // Remove al AUTO_INCREMENT
-                    if($item_value == 'AUTO_INCREMENT'){
-                        $line = str_replace('AUTO_INCREMENT',' ',$line);
-                    }
-
-                    //ALL enum to TYPE
-                    if($item_value == 'enum('){
-                        $line = mb_strstr($line,'enum(',TRUE) .$tablename.'_'.mb_strstr($line,'enum(',TRUE).',';
-                    }
-
-                    //ALL datetime in timestamp
-                    if($item_value == 'datetime')
-                    {
-                        $line = str_replace($item_value,'timestamp',$line);
+                    //REPLACE 'double' into 'text'
+                    if($item_value == 'double'){
+                        $line = str_replace($item_value,'double precision',$line);
                     }
 
                     //REPLACE 'longtext' into 'text'
@@ -281,7 +273,7 @@ class Convert{
 
             //!!!!!Notice: Undefined offset: !!!!!
             //can be happen when $content[ line_num - n] do not exist
-            //because the NULL-lines where deleted
+            //because the NULL-lines are deleted
             if (array_key_exists($line_num,$content)){
                 if(mb_strstr($content[$line_num],');',FALSE) != FALSE) {
 
