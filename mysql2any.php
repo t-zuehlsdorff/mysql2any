@@ -6,16 +6,13 @@
  * Time: 12:58
  */
 
-class Convert{
 
-//Main function
-//read filename give value
     function main_mysql2any($sqlFilename)
     {
-        $sqlFilename = $this->checkFile($sqlFilename);
+        $sqlFilename = checkFile($sqlFilename);
 
         if ($sqlFilename != NULL){
-            $this->convertFile($sqlFilename);
+            convertFile($sqlFilename);
         }
         print("\nende\n");
     }
@@ -41,6 +38,7 @@ class Convert{
     }
 
     //List with all wrong items
+    //obsolet
     function wrongItems()
     {
         $item = array('double', 'longblob', 'CHARACTER SET','longtext','`', 'COMMENT','int(', 'unsigned', 'AUTO_INCREMENT', 'ENGINE', 'KEY', ';', 'datetime',',\'', 'UNLOCK TABLES', 'enum(');
@@ -50,7 +48,7 @@ class Convert{
     //convert INSERT INTO lines
     function convert_insert($content){
 
-        $item = $this->wrongItems();
+        $item =  wrongItems();
 
         foreach ($content as $line_num => $line)
         {
@@ -82,186 +80,206 @@ class Convert{
         return $content;
     }
 
+    //extract A! columnname from statement
+    function give_columnname($line)
+    {
+        if(mb_strstr($line,'"',FALSE)!= FALSE)
+        {
+            $columnname = mb_strstr($line,'"',FALSE);
+            $columnname = mb_strstr($columnname," ",TRUE);
+            $columnname = str_replace('"','',$columnname);
+
+        } else{$columnname = NULL;};
+
+        return $columnname;
+    }
+
+    //extract the tablename from CREATE TABLE
+    //if no new Tablename, return old
+    function give_tablename($line, $tablename)
+    {
+        if(mb_strstr($line,'CREATE TABLE',FALSE) != FALSE)
+        {
+            $tablename = mb_strstr($line,'"',FALSE);
+            $tablename = mb_strstr($tablename,'(',TRUE);
+            $tablename = str_replace('"','',$tablename);
+            $tablename = str_replace(' ','',$tablename);
+        }
+        return $tablename;
+    }
+
+    //convert all '`' to '"'
+    function convert_quote($line)
+    {
+        $line = str_replace('`','"',$line);
+        return $line;
+    }
+
+    //creates ENUM() expression. Give NULL if no ENUM
+    function create_enum($line,$tablename)
+    {
+        if(mb_strstr($line,'enum(',FALSE)!= FALSE)
+        {
+            $line = trim($line);
+            $line = str_replace('"','',$line);
+            $content = mb_strstr($line,'(',FALSE);
+            $content = mb_strstr($content,')',TRUE);
+            $line = 'CREATE TYPE "'.$tablename.'_'. mb_strstr($line,' enum(',TRUE).'" AS ENUM '.$content.');';
+
+        }else{$line = NULL;};
+        return $line;
+    }
+
+    //CONVERT 'CHARACTER SET' to check() give converted line
+    function convert_character($line)
+    {
+        if(mb_strstr($line,'CHARACTER SET',TRUE) != FALSE){
+            $item_to = mb_strstr($line,'CHARACTER SET',TRUE);
+            $item_from = mb_strstr($line,'CHARACTER SET',FALSE);
+            $line = str_replace('CHARACTER SET'.' ','',$line);
+
+        }
+        return $line;
+    }
+
+    // convert data-types
+    //include converting enum()
+    function convert_datatypes($line,$tablename)
+    {
+        //CONVERT via reg_replace
+        $regArray = array('/[^ ]+nt\((\d+)\)/' => 'Integer', '/enum[^ ]+/' => $tablename.'_'.mb_strstr($line,'" enum(',TRUE), '/\_\"/' => '_',
+                        '/longblob/' => 'TEXT', '/double/' => 'double precision', '/longtext/' => 'text', '/datetime/' => 'timestamp', '/AUTO_INCREMENT/' => '',
+                        '/unsigned/' => 'CHECK('.mb_strstr($line,' ',TRUE).' >= 0)', '/\`/' => '"', '/\) ENGINE.+/' => ');');
+        foreach($regArray AS $from => $to) {
+            $line = preg_replace($from, $to, $line);
+        }
+
+            return $line;
+    }
+
+    // create Indixies
+    // Schema: CREATE INDEX "name" ON "tablename"("columnname");
+    //remove all KEY lines, Convert KEY to CREATE INDEX  and write in index ARRAY
+    function create_index($line, $tablename, $convert)
+    {
+        $new = NULL;
+        $preVar = NULL;
+        $new = NULL;
+
+        if((mb_strstr($line, 'KEY')) != FALSE) {
+            if ((mb_strstr($line, 'PRIMARY')) == FALSE) {
+                if ((mb_strstr($line, 'CONSTRAINT')) == FALSE) {
+                    if ($convert == TRUE) {
+
+                        $preVar = ' ';
+                        $new = $line;
+
+                        if ((mb_strstr($line, 'UNIQUE')) != FALSE) {
+                            $preVar = ' UNIQUE ';
+                        }
+
+                        $regArray = array('/.*KEY/' => ('CREATE'.$preVar.'INDEX'), '/\`/' => '"', '/\s\"/' => (' "' . $tablename . '_'),'/\).*/' => ');');
+                        foreach ($regArray AS $from => $to) {
+                            $new = preg_replace($from, $to, $new);
+                        }
+                    }else{
+                        $line = NULL;
+                    }
+                }
+            }
+        }
+
+        if($convert == TRUE){
+            return $new;
+        }else{
+            return $line;
+        }
+    }
+
+    //Remove all COMMENT, write comments in array divide column-comments and table-comments
+    function convert_comment($line,$tablename){
+
+        if(mb_strstr($line,'COMMENT',FALSE) != FALSE)
+        {
+            $cache_value = mb_strstr($line,'COMMENT',FALSE); //from ELEMENT to END
+            $cache_value_last = NULL;
+
+            if((mb_strstr($cache_value, ';', FALSE)) != FALSE){
+                $cache_value_last = mb_strstr($cache_value, ';', FALSE);
+            }elseif((mb_strstr($cache_value, ',', FALSE)) != FALSE){
+                $cache_value_last = mb_strstr($cache_value, ',', FALSE);
+            }
+
+            $line = mb_strstr($line,$cache_value,TRUE). $cache_value_last;
+
+            // comment like: COMMENT ON {COLUMN,TABLE} my_table.my_column IS 'Employee ID number';
+            if(mb_strstr($line,' ',TRUE))
+            {
+                $cache_comment = strchr($cache_value,'\'',FALSE);
+                $cache_comment = str_replace(',','',$cache_comment);
+
+                if(mb_strstr($cache_value,'=',FALSE) != FALSE){
+                    $comment[] = 'COMMENT ON TABLE '.$tablename.' IS '.$cache_comment;
+                }else{
+                    $comment[] = 'COMMENT ON COLUMN '.$tablename.'.'.mb_strstr($line,' ',TRUE).' IS '.$cache_comment.';';
+                }
+            }
+        }
+        return  NULL;
+    }
+
+    function format_content($content,$line_num){
+
+        //!!!!!Notice: Undefined offset: !!!!!
+        //can be happen when $content[ line_num - n] do not exist
+        //because the NULL-lines are deleted
+        if (array_key_exists($line_num,$content)){
+            if(mb_strstr($content[$line_num],');',FALSE) != FALSE) {
+
+                $forward = TRUE;
+                $n = 0;
+
+                do{
+                    if (array_key_exists($line_num - $n,$content)){
+                        if($n >= 1){
+                            $content[$line_num - $n] = str_replace(",\n","\n",$content[$line_num - $n]);
+                            $forward = FALSE;
+                        };
+                    }
+                    $n++;
+                }while($forward);
+            }
+        }
+
+        return $content;
+    }
+
     //convert CREATE TABLE lines
     function convert_create($content){
 
-        $item = $this->wrongItems();
+        $item = wrongItems();
         $before = array();      //for statements before 'CREATE INDEX' like
         $index = array();      //for creating the 'CREATE INDEX' statements
         $comment = array();     //for creating the 'COMMENT' statements
         $return = array();
         $tablename = NULL;
-        $columnname = NULL;
 
         foreach ($content as $line_num => $line)
         {
             $line = trim($line);
-            $columnname = NULL;
+            $line = convert_quote($line);
 
-            //extract the tablename from CREATE TABLE
-            if(mb_strstr($line,'CREATE TABLE',FALSE) != FALSE)
-            {
-                $tablename = mb_strstr($line,'`',FALSE);
-                $tablename = mb_strstr($tablename,'(',TRUE);
-                $tablename = str_replace('`','',$tablename);
-                $tablename = str_replace(' ','',$tablename);
-            }
+            $tablename = give_tablename($line,$tablename);
 
-            //extract A! columnname from statement. It can be a name for a new column,
-            //it can be a name for a key or something
-            //Necessary for write the columnname: "columnname" if a column is named like a SQL order like "default" oder "from"
-            //a column can be named like a SQL order but it should not  ...
-            //code not optimal
-            if($line != NULL){
-                if($line[0] == "`"){
-                    $columnname = mb_strstr($line,'`',FALSE);
-                    $columnname = mb_strstr($columnname," ",TRUE);
-                    $columnname = str_replace('`','',$columnname);
-                }
-            }
+            $before[] = create_enum($line,$tablename);
+            $line = convert_datatypes($line,$tablename);
+            $line = convert_character($line);
+            $index[] = create_index($line,$tablename,TRUE); //write new INDEX
+            $line = create_index($line,$tablename,FALSE);   //delete old KEY from line
+            $comment[] = convert_comment($line,$tablename);
 
-            if(mb_strstr($line,'enum(',FALSE)!= FALSE){
+            $content = format_content($content,$line_num);
 
-                $first = trim($line);
-                $first_content = mb_strstr($first,'(',FALSE);
-                $first_content = mb_strstr($first_content,')',TRUE);
-                $first = "\n".'CREATE TYPE '.$tablename.'_'.mb_strstr($first,'enum(',TRUE).'AS ENUM '.$first_content.");";
-
-                $before[] = $first;
-            }
-
-            foreach ($item as $item_num => $item_value)
-            {
-                if (mb_strstr($line,$item_value,FALSE) != FALSE)
-                {
-
-                    //CONVERT 'CHARACTER SET' to check()
-                    if($item_value == 'CHARACTER SET'){
-                        $item_to = mb_strstr($line,$item_value,TRUE);
-                        $item_from = mb_strstr($line,$item_value,FALSE);
-                        $item_from = str_replace($item_value.' ','',$item_from);
-                        $item_from = mb_strstr($item_from,' ',FALSE);
-
-                        $line = $item_to.$item_from;
-                    }
-
-                    //Remove all " ` " in tablename, columnname etc
-                    if($item_value == '`'){
-                        $line = str_replace($item_value,'',$line);
-                    }
-
-                    // convert all unsigned in CHECK()
-                    if($item_value == 'unsigned'){
-                        $cache_value_columnname = mb_strstr($line,' ',TRUE);
-                        $line = str_replace($item_value,'CHECK('.$cache_value_columnname.' >= 0)',$line);
-                    }
-
-                    // Remove al AUTO_INCREMENT
-                    if($item_value == 'AUTO_INCREMENT'){
-                        $line = str_replace($item_value,' ',$line);
-                    }
-
-                    //ALL enum to TYPE
-                    if($item_value == 'enum('){
-                        $line = mb_strstr($line,'enum(',TRUE) .$tablename.'_'.mb_strstr($line,'enum(',TRUE).',';
-                    }
-
-                    //ALL datetime in timestamp
-                    if($item_value == 'datetime')
-                    {
-                        $line = str_replace($item_value,'timestamp',$line);
-                    }
-
-                    //CONVERT 'LONGBLOB' NOT CLEAR!!
-                    //for test convert in 'text' (option 'BYTEA')
-                    if($item_value == 'longblob'){
-
-                        $line = str_replace($item_value,'TEXT',$line);
-                        /*
-                        print("\nel que lee esto es una estupidez");
-                        echo 'ERROR: ';
-                        var_dump($line);
-                        echo 'Type '.$item_value." can not clearly converted \n";
-                        echo "See code line 150\n";
-                        echo "operation aborted!\n";
-                        exit;
-                        */
-                    }
-
-                    //REPLACE 'double' into 'text'
-                    if($item_value == 'double'){
-                        $line = str_replace($item_value,'double precision',$line);
-                    }
-
-                    //REPLACE 'longtext' into 'text'
-                    if($item_value == 'longtext'){
-                        $line = str_replace($item_value,'text',$line);
-                    }
-
-                    //ALL 'x'-int(n) to Integer
-                    if($item_value == 'int(')
-                    {
-                        for($n = 0; $n <= 30; $n++){
-                            $line = str_replace('small' . $item_value . $n . ')','Integer',$line);
-                            $line = str_replace('big' . $item_value . $n . ')','Integer',$line);
-                            $line = str_replace('tiny' . $item_value . $n . ')','Integer',$line);
-                            $line = str_replace($item_value . $n . ')','Integer',$line);
-                            $line = str_replace('\'','',$line);
-                        }
-                    }
-
-                    //Remove all COMMENT, write comments in array divide column-comments and table-comments
-                    if($item_value == 'COMMENT')
-                    {
-                        $cache_value = mb_strstr($line,$item_value,FALSE); //from ELEMENT to END
-                        $cache_value_last = NULL;
-
-                        if((mb_strstr($cache_value, ';', FALSE)) != FALSE){
-                            $cache_value_last = mb_strstr($cache_value, ';', FALSE);
-                        }elseif((mb_strstr($cache_value, ',', FALSE)) != FALSE){
-                            $cache_value_last = mb_strstr($cache_value, ',', FALSE);
-                        }
-
-                        $line = mb_strstr($line,$cache_value,TRUE). $cache_value_last;
-
-                        // comment like: COMMENT ON {COLUMN,TABLE} my_table.my_column IS 'Employee ID number';
-                        if(mb_strstr($line,' ',TRUE))
-                        {
-                            $cache_comment = strchr($cache_value,'\'',FALSE);
-                            $cache_comment = str_replace(',','',$cache_comment);
-
-                            if(mb_strstr($cache_value,'=',FALSE) != FALSE){
-                                $comment[] = 'COMMENT ON TABLE '.$tablename.' IS '.$cache_comment;
-                            }else{
-                                $comment[] = 'COMMENT ON COLUMN '.$tablename.'.'.mb_strstr($line,' ',TRUE).' IS '.$cache_comment.';';
-                            }
-                        }
-                    }
-
-
-                    //remove all KEY lines, Convert KEY to CREATE INDEX  and write in index ARRAY
-                    if($item_value == 'KEY'){
-                        if((mb_strstr($line, 'PRIMARY')) == FALSE){
-                            if((mb_strstr($line, 'CONSTRAINT')) == FALSE)
-                            {
-                                //cuts name of column from line
-                                //KEY `IDX_CATALOG_PRODUCT_ENTITY_ENTITY_TYPE_ID` (`entity_type_id`),
-                                $cache_value_columnname = mb_strstr($line,')',TRUE);
-                                $cache_value_columnname = mb_strstr($cache_value_columnname,'(',FALSE);
-                                $cache_value_columnname = str_replace('(','',$cache_value_columnname);
-
-                                $line = NULL;
-                                $index[] = 'CREATE INDEX'.' '.$tablename.'_'.str_replace(',','_',$cache_value_columnname).' ON '.$tablename.' ('.$cache_value_columnname.');';
-                            }
-                        }
-                    }
-
-                    //Remove all CHARSET AND STANDARD
-                    if($item_value == 'ENGINE'){
-                        $line = ");";
-                    }
-                }
-            }
             //write converted line and ?attach comment with old line-content?
             //remove ',' in the line before ");"
             //$content[$line_num] = $line.'   /* CONVERTED: '.trim($content[$line_num]).'*/'."\n";
@@ -271,38 +289,22 @@ class Convert{
                 unset($content[$line_num]);
             }
 
-            //!!!!!Notice: Undefined offset: !!!!!
-            //can be happen when $content[ line_num - n] do not exist
-            //because the NULL-lines are deleted
-            if (array_key_exists($line_num,$content)){
-                if(mb_strstr($content[$line_num],');',FALSE) != FALSE) {
 
-                    $forward = TRUE;
-                    $n = 0;
-
-                    do{
-                        if (array_key_exists($line_num - $n,$content)){
-                            if($n >= 1){
-                                $content[$line_num - $n] = str_replace(",\n","\n",$content[$line_num - $n]);
-                                $forward = FALSE;
-                            };
-                        }
-                        $n++;
-                    }while($forward);
-                }
-            }
         }
 
         foreach($before as $before_num => $before_line){
-            $return[] = $before_line."\n";
+            if($before_line != NULL){
+                $return[] = $before_line."\n";
+            }
         }
 
         foreach($content as $content_num => $content_line){
             $return[] = $content_line;
         }
-
         foreach($index as $index_num => $index_line){
-            $return[] = $index_line."\n";
+            if($index_line != NULL){
+                $return[] = $index_line."\n";
+            }
         }
         foreach($comment as $comment_num => $comment_line){
             $return[] = $comment_line."\n";
@@ -333,7 +335,7 @@ class Convert{
                 }while(mb_strpos($cache,';')== FALSE);
 
                 $content[] = $cache . "\n";
-                $content = $this->convert_create($content);
+                $content = convert_create($content);
 
                 foreach($content As $con_num => $con_line){
                     fwrite($newfile,$con_line);
@@ -352,7 +354,7 @@ class Convert{
                 }while(mb_strpos($cache,';')== FALSE);
 
                 $content[] = $cache . "\n";
-                $content  = $this->convert_insert($content);
+                $content  = convert_insert($content);
 
                 foreach($content As $con_num => $con_line){
                     fwrite($newfile,$con_line);
@@ -370,9 +372,7 @@ class Convert{
 
         return NULL;
     }
-}
 
-$convert = new Convert;
 var_dump($argv[1]);
-$convert->main_mysql2any($argv[1]);
+main_mysql2any($argv[1]);
 
